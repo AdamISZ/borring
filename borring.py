@@ -6,10 +6,24 @@ import random
 
 
 def borr_hash(m, pubkey, i, j):
+    '''A Sha256 hash of data in the standard 'borromean'
+    format. Note that 'pubkey' is the value kG as according to
+    kG = sG - eP.
+    i,j : the indices to a specific vertex in the graph.
+    m - the message to be hashed.
+    Returns - the hash.
+    '''
     x = m + btc.encode_pubkey(pubkey,'bin_compressed')+str(i)+str(j)
     return sha256(x).digest()
 
 def generate_keyfiles(n, m, vf, sf):
+    '''Generate a set of public and private keys
+    for testing.
+    n - the number of OR loops
+    m - the number of keys per loop (note: constant in this crude version)
+    vf - the file path to which to write the verification keys
+    sf - the file path to which to write the signing (private) keys
+    '''
     signing_indices = random.sample(range(m),n)
     priv=[]
     with open(sf,'wb') as f:
@@ -27,17 +41,26 @@ def generate_keyfiles(n, m, vf, sf):
 		pubkeys.append(binascii.hexlify(p))
 	    f.write(','.join(pubkeys)+'\n')
     
-def import_keys(vf, sf):
-    #import the verification keys;
-    #one list of pubkeys per loop in hex format, comma separated
-    #the first pubkey in each list is to be understood as the input
-    #for the connecting node.    
+def import_keys(vf, sf=None):
+    '''Import the verification keys;
+    one list of pubkeys per loop in hex format, comma separated
+    the first pubkey in each list is to be understood as the input
+    for the connecting node.    
+    vf - the path to the file containing verification pubkeys
+    sf - the path to the file containing signing keys, if applicable.
+    Returns:
+    vks - set of verification keys
+    signing_indices - the indices corresponding to the private keys
+    sks - the list of private keys
+    '''
     vks = {}
     with open(vf,'rb') as f:
 	or_loops = f.readlines()
 	for i,loop in enumerate(or_loops):
 	    raw_pks = loop.strip().split(',')
 	    vks[i] = [btc.decode_pubkey(pk) for pk in raw_pks]
+    if not sf:
+	return (vks, None, None)
     #import the signing private keys;
     #at least one per loop
     with open(sf,'rb') as f:
@@ -63,6 +86,9 @@ def get_kG(e, P, s=None):
     return (btc.fast_add(sG, minus_eP), s)    
 
 def get_sig_message(m):
+    '''The full message is a sha256 hash
+    of the message string concatenated with the
+    compressed binary format of all of the verification keys.'''
     full_message = m
     for loop in vks:
 	for p in vks[loop]:
@@ -76,6 +102,11 @@ def encode_sig(e, s):
     return sig
 
 def decode_sig(sig, keyset):
+    '''
+    Signature format: e0 (the hash value for the zero index for all loops)
+    then s(i,j) , i range over the number of loops, 
+    j range over the number of verification keys in the ith loop.
+    All 1+i*j values are 32 byte binary variables.'''
     e0 = sig[:32]
     s = {}
     c = 32
@@ -118,6 +149,11 @@ if __name__ == '__main__':
     except:
 	parser.error('Provide a single string argument as a message')
     
+    #
+    #vks: the set of all verification public keys
+    #signing_indices: the index of the vertex for which we have the private key, for each OR loop
+    #sks: the set of signing keys (set to None for verification case)
+    if options.read_sig_file: options.sign_keys_file = None
     vks, signing_indices, sks = import_keys(options.verify_keys_file, options.sign_keys_file)
     
     #construct message to be signed
@@ -125,34 +161,51 @@ if __name__ == '__main__':
     
     if not options.read_sig_file:
 	#sign operation
+	
+	#the set of all (Borromean)  hash values;
+	#the vertices of the graph
 	e = {}
+	
+	#the set of all signature values (s(i,j))
 	s = {}
+	
+	#for each OR loop, the index at which we start
+	#the signature calculations, the one after the
+	#the signing index (the one we have the privkey for)
 	start_index = {}
-	k = [os.urandom(32) for i in range(len(vks))] #k for the signing index
+	
+	#the random value set as the k-value for the signing index
+	k = [os.urandom(32) for i in range(len(vks))] 
+	
 	to_be_hashed = M
 	for i, loop in enumerate(vks):
 	    e[i]=[None]*len(vks[loop])
 	    s[i] = [None]*len(vks[loop])
 	    kG = btc.fast_multiply(btc.G, btc.decode(k[i],256))
-	    #starting index is that after signing index
 	    start_index[i] = (signing_indices[i]+1)%len(vks[loop])
 	    
 	    if start_index[i]==0:
 		to_be_hashed += btc.encode_pubkey(kG,'bin_compressed')
+		#in this case, there are no more vertices to process in the first stage
 		continue
+	    
 	    e[i][start_index[i]] = borr_hash(M, kG, i, start_index[i])
 	    for x in range(start_index[i]+1,len(vks[loop])):
 		y,s[i][x-1] = get_kG(e[i][x-1], vks[i][x-1])
 		e[i][x] = borr_hash(M,y,i,x)
-		
+	    
+	    #kGend is the EC point corresponding to the k-value
+	    #for the vertex before zero, which will be included in the hash for e0
 	    kGend, s[i][len(vks[i])-1] = get_kG(e[i][len(vks[i])-1],vks[i][len(vks[i])-1])
 	    to_be_hashed += btc.encode_pubkey(kGend,'bin_compressed')	
 	    
-	#note that e[i][0] is the same for all i
+	#note that e[i][0] == e0 for all i
 	e0 = sha256(to_be_hashed).digest()
 	for i in range(len(vks)):
 	    e[i][0] = e0
-	    
+	
+	#continue processing for all vertices after the 0-th, up
+	#to the signing index.
 	for i,loop in enumerate(vks):
 	    for x in range(1,signing_indices[i]+1):
 		y, s[i][x-1] = get_kG(e[i][x-1],vks[i][x-1])
@@ -170,7 +223,9 @@ if __name__ == '__main__':
 		f.write(final_sig)
     else:
 	#verify operation
-	print 'Now trying to verify'
+	#as noted in the paper, this operation is much simpler
+	#than signing as we don't treat the signing index as distinct.
+	#Because we don't know it!
 	with open(options.read_sig_file,'rb') as f:
 	    sig = f.read()
 	received_sig = decode_sig(sig, vks)
@@ -181,6 +236,8 @@ if __name__ == '__main__':
 	    e[i] = [None]*len(vks[loop])
 	    e[i][0] = e0
 	    for j in range(len(vks[loop])):
+		#as in signing, r is the EC point corresponding
+		#to the k-value for the last vertex before 0.
 		r,dummy = get_kG(e[i][j],vks[i][j],s=s[i][j])
 		if j!=len(vks[loop])-1:
 		    e[i][j+1] = borr_hash(M,r,i,j+1)
