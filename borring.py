@@ -24,7 +24,7 @@ def generate_keyfiles(n, m, vf, sf):
     vf - the file path to which to write the verification keys
     sf - the file path to which to write the signing (private) keys
     '''
-    signing_indices = random.sample(range(m),n)
+    signing_indices = [random.choice(range(m)) for _ in range(n)]
     priv=[]
     with open(sf,'wb') as f:
 	for i in range(n):
