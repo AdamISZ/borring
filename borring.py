@@ -5,7 +5,7 @@ from hashlib import sha256
 import random
 
 
-def borr_hash(m, pubkey, i, j):
+def borr_hash(m, pubkey, i, j, is_pubkey=True):
     '''A Sha256 hash of data in the standard 'borromean'
     format. Note that 'pubkey' is the value kG as according to
     kG = sG - eP.
@@ -13,7 +13,9 @@ def borr_hash(m, pubkey, i, j):
     m - the message to be hashed.
     Returns - the hash.
     '''
-    x = m + btc.encode_pubkey(pubkey,'bin_compressed')+str(i)+str(j)
+    #little hack assuming sizes < 256
+    p = btc.encode_pubkey(pubkey,'bin_compressed') if is_pubkey else pubkey
+    x = p + m +'\x00'*3 + chr(i) + '\x00'*3 + chr(j) 
     return sha256(x).digest()
 
 def generate_keyfiles(n, m, vf, sf):
@@ -38,6 +40,8 @@ def generate_keyfiles(n, m, vf, sf):
 		    p = btc.privtopub(priv[i])
 		else:
 		    p = btc.privtopub(os.urandom(32))
+		p = btc.decode_pubkey(p)
+		p = btc.encode_pubkey(p,'bin_compressed')
 		pubkeys.append(binascii.hexlify(p))
 	    f.write(','.join(pubkeys)+'\n')
     
@@ -78,11 +82,13 @@ def import_keys(vf, sf=None):
     #signing keys have right configuration relative to verification keys.
     return (vks, signing_indices, sks)
 
-def get_kG(e, P, s=None):
+def get_kG(e, P, s=None, endian=False):
     if not s:
-	s = os.urandom(32) 
+	s = os.urandom(32)
+    if endian: #signature is passed in little endian byte order; reverse
+	s = s[::-1]
     sG = btc.fast_multiply(btc.G,btc.decode(s,256))
-    minus_eP = btc.fast_multiply(P,-btc.decode(e,256))
+    minus_eP = btc.fast_multiply(P,btc.decode(e,256))
     return (btc.fast_add(sG, minus_eP), s)    
 
 def get_sig_message(m):
@@ -101,12 +107,14 @@ def encode_sig(e, s):
 	sig += ''.join(s[a])
     return sig
 
-def decode_sig(sig, keyset):
+def decode_sig(sig, keyset, fmt='bin'):
     '''
     Signature format: e0 (the hash value for the zero index for all loops)
     then s(i,j) , i range over the number of loops, 
     j range over the number of verification keys in the ith loop.
     All 1+i*j values are 32 byte binary variables.'''
+    if fmt != 'bin':
+	sig = binascii.unhexlify(sig)
     e0 = sig[:32]
     s = {}
     c = 32
@@ -138,16 +146,22 @@ if __name__ == '__main__':
                       help='write signature to file')
     parser.add_option('-e','--verify-sig', action='store', dest='read_sig_file',
                       help='verify a signature in the specified file, using the verify keys specified in -v')
+    parser.add_option('-a','--message-file',action='store', dest='message_file',
+                      help='give path to file where message to be signed is stored; alternative to passing message on command line.')
     (options, args) = parser.parse_args()
-    
+	
     if options.generate_keys:
 	    print 'generating'
 	    generate_keyfiles(options.nrings, options.keys_per_ring, options.verify_keys_file, options.sign_keys_file)
 	    exit(0)    
     try:
-	message = args[0]
+	if options.message_file:
+	    with open(options.message_file,"rb") as f:
+		message = binascii.unhexlify(f.read())
+	else:
+	    message = args[0]    
     except:
-	parser.error('Provide a single string argument as a message')
+	parser.error('Provide a single string argument as a message, or specify message file with -a')
     
     #
     #vks: the set of all verification public keys
@@ -155,9 +169,13 @@ if __name__ == '__main__':
     #sks: the set of signing keys (set to None for verification case)
     if options.read_sig_file: options.sign_keys_file = None
     vks, signing_indices, sks = import_keys(options.verify_keys_file, options.sign_keys_file)
-    
     #construct message to be signed
-    M = get_sig_message(message)
+    if not options.message_file:
+	M = get_sig_message(message)
+    else:
+	M = message
+	print 'working with message'
+	print binascii.hexlify(M)
     
     if not options.read_sig_file:
 	#sign operation
@@ -228,28 +246,29 @@ if __name__ == '__main__':
 	#Because we don't know it!
 	with open(options.read_sig_file,'rb') as f:
 	    sig = f.read()
-	received_sig = decode_sig(sig, vks)
+	fmt = 'hex' if options.message_file else 'bin'
+	received_sig = decode_sig(sig, vks, fmt)
 	e = {}	
 	e0, s = received_sig
 	r0s = ''
 	for i, loop in enumerate(vks):
 	    e[i] = [None]*len(vks[loop])
-	    e[i][0] = e0
+	    e[i][0] = borr_hash(M,e0,i,0,is_pubkey=False)
 	    for j in range(len(vks[loop])):
 		#as in signing, r is the EC point corresponding
 		#to the k-value for the last vertex before 0.
-		r,dummy = get_kG(e[i][j],vks[i][j],s=s[i][j])
+		r,dummy = get_kG(e[i][j],vks[i][j],s=s[i][j], endian=True)
 		if j!=len(vks[loop])-1:
 		    e[i][j+1] = borr_hash(M,r,i,j+1)
 		else:
 		    r0s += btc.encode_pubkey(r,'bin_compressed')
-	if not e0==sha256(M + r0s).digest():
+	if not e0==sha256(r0s + M).digest():
 	    print 'verification failed'
 	else:
 	    print 'verification success'
 	
 	print binascii.hexlify(e0)
-	print binascii.hexlify(sha256(M+r0s).digest())    
+	print binascii.hexlify(sha256(r0s + M).digest())    
 		
 	
 	
