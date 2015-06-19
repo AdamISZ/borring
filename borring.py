@@ -99,16 +99,14 @@ def get_sig_message(m, vks):
 	    full_message += btc.encode_pubkey(p,'bin_compressed')
     return sha256(full_message).digest() 
 
-def encode_sig(e, s, le):
+def encode_sig(e, s):
     sig = e
     for a in sorted(s):
 	for b in s[a]:
-	    if le:
-		b = b[::-1]
 	    sig += b
     return sig
 
-def decode_sig(sig, keyset, le, fmt='bin'):
+def decode_sig(sig, keyset, fmt='bin'):
     '''
     Signature format: e0 (the hash value for the zero index for all loops)
     then s(i,j) , i range over the number of loops, 
@@ -123,8 +121,6 @@ def decode_sig(sig, keyset, le, fmt='bin'):
 	s[i]=[None]*len(keyset[i])
 	for j in range(len(keyset[i])):
 	    s[i][j] = sig[c:c+32]
-	    if le: #signature is passed in little endian byte order; reverse
-		s[i][j] = s[i][j][::-1]
 	    c+=32
     return (e0, s)
 
@@ -154,8 +150,6 @@ if __name__ == '__main__':
     parser.add_option('-o','--print-modified-message', action='store_true', dest='mod_message',
                        default=False,help='Print the augmented message, which hashes the original message with the verification'+
                        ' keys as specified by -v.')
-    parser.add_option('-d','--little-endian-signatures',action='store_true',dest='le_sigs',
-                       default=False, help='Output all 32 byte signatures in little endian format')
     (options, args) = parser.parse_args()
 	
     if options.generate_keys:
@@ -245,9 +239,7 @@ if __name__ == '__main__':
 	    s[i][signing_indices[i]] = \
 		btc.encode((btc.decode(k[i],256) - \
 		(btc.decode(sks[i],256))*(btc.decode(e[i][signing_indices[i]],256)))%btc.N, 256)
-	if options.le_sigs:
-	    print "Using little endian signatures"
-	final_sig = encode_sig(e0,s, options.le_sigs)
+	final_sig = encode_sig(e0,s)
 	if options.write_sig_file:
 	    print 'writing sig to file: '+options.write_sig_file
 	    print 'signature length: '+str(len(final_sig))
@@ -261,7 +253,7 @@ if __name__ == '__main__':
 	with open(options.read_sig_file,'rb') as f:
 	    sig = f.read()
 	fmt = 'hex' if options.message_file else 'bin'
-	received_sig = decode_sig(sig, vks, options.le_sigs,fmt=fmt)
+	received_sig = decode_sig(sig, vks, fmt=fmt)
 	e = {}	
 	e0, s = received_sig
 	r0s = ''
