@@ -82,16 +82,14 @@ def import_keys(vf, sf=None):
     #signing keys have right configuration relative to verification keys.
     return (vks, signing_indices, sks)
 
-def get_kG(e, P, s=None, endian=False):
+def get_kG(e, P, s=None):
     if not s:
 	s = os.urandom(32)
-    if endian: #signature is passed in little endian byte order; reverse
-	s = s[::-1]
     sG = btc.fast_multiply(btc.G,btc.decode(s,256))
     minus_eP = btc.fast_multiply(P,btc.decode(e,256))
     return (btc.fast_add(sG, minus_eP), s)    
 
-def get_sig_message(m):
+def get_sig_message(m, vks):
     '''The full message is a sha256 hash
     of the message string concatenated with the
     compressed binary format of all of the verification keys.'''
@@ -101,13 +99,16 @@ def get_sig_message(m):
 	    full_message += btc.encode_pubkey(p,'bin_compressed')
     return sha256(full_message).digest() 
 
-def encode_sig(e, s):
-    sig = e[0][0]
-    for a in s:
-	sig += ''.join(s[a])
+def encode_sig(e, s, le):
+    sig = e
+    for a in sorted(s):
+	for b in s[a]:
+	    if le:
+		b = b[::-1]
+	    sig += b
     return sig
 
-def decode_sig(sig, keyset, fmt='bin'):
+def decode_sig(sig, keyset, le, fmt='bin'):
     '''
     Signature format: e0 (the hash value for the zero index for all loops)
     then s(i,j) , i range over the number of loops, 
@@ -122,6 +123,8 @@ def decode_sig(sig, keyset, fmt='bin'):
 	s[i]=[None]*len(keyset[i])
 	for j in range(len(keyset[i])):
 	    s[i][j] = sig[c:c+32]
+	    if le: #signature is passed in little endian byte order; reverse
+		s[i][j] = s[i][j][::-1]
 	    c+=32
     return (e0, s)
 
@@ -148,6 +151,11 @@ if __name__ == '__main__':
                       help='verify a signature in the specified file, using the verify keys specified in -v')
     parser.add_option('-a','--message-file',action='store', dest='message_file',
                       help='give path to file where message to be signed is stored; alternative to passing message on command line.')
+    parser.add_option('-o','--print-modified-message', action='store_true', dest='mod_message',
+                       default=False,help='Print the augmented message, which hashes the original message with the verification'+
+                       ' keys as specified by -v.')
+    parser.add_option('-d','--little-endian-signatures',action='store_true',dest='le_sigs',
+                       default=False, help='Output all 32 byte signatures in little endian format')
     (options, args) = parser.parse_args()
 	
     if options.generate_keys:
@@ -169,14 +177,20 @@ if __name__ == '__main__':
     #sks: the set of signing keys (set to None for verification case)
     if options.read_sig_file: options.sign_keys_file = None
     vks, signing_indices, sks = import_keys(options.verify_keys_file, options.sign_keys_file)
+    
     #construct message to be signed
     if not options.message_file:
-	M = get_sig_message(message)
+	M = get_sig_message(message, vks)
     else:
 	M = message
 	print 'working with message'
 	print binascii.hexlify(M)
     
+    #if option selected, simply print out message which has pubkey commitments
+    if options.mod_message:
+	print get_sig_message(message, vks)
+	exit(0)
+	
     if not options.read_sig_file:
 	#sign operation
 	
@@ -194,8 +208,7 @@ if __name__ == '__main__':
 	
 	#the random value set as the k-value for the signing index
 	k = [os.urandom(32) for i in range(len(vks))] 
-	
-	to_be_hashed = M
+	to_be_hashed = ''
 	for i, loop in enumerate(vks):
 	    e[i]=[None]*len(vks[loop])
 	    s[i] = [None]*len(vks[loop])
@@ -218,10 +231,10 @@ if __name__ == '__main__':
 	    to_be_hashed += btc.encode_pubkey(kGend,'bin_compressed')	
 	    
 	#note that e[i][0] == e0 for all i
+	to_be_hashed += M
 	e0 = sha256(to_be_hashed).digest()
 	for i in range(len(vks)):
-	    e[i][0] = e0
-	
+	    e[i][0] = borr_hash(M,e0,i,0,is_pubkey=False)
 	#continue processing for all vertices after the 0-th, up
 	#to the signing index.
 	for i,loop in enumerate(vks):
@@ -230,10 +243,11 @@ if __name__ == '__main__':
 		e[i][x] = borr_hash(M,y,i,x)
 	    #finally, set the signature at the signing index using the privkey
 	    s[i][signing_indices[i]] = \
-		btc.encode((btc.decode(k[i],256) + \
+		btc.encode((btc.decode(k[i],256) - \
 		(btc.decode(sks[i],256))*(btc.decode(e[i][signing_indices[i]],256)))%btc.N, 256)
-	
-	final_sig = encode_sig(e,s)
+	if options.le_sigs:
+	    print "Using little endian signatures"
+	final_sig = encode_sig(e0,s, options.le_sigs)
 	if options.write_sig_file:
 	    print 'writing sig to file: '+options.write_sig_file
 	    print 'signature length: '+str(len(final_sig))
@@ -247,7 +261,7 @@ if __name__ == '__main__':
 	with open(options.read_sig_file,'rb') as f:
 	    sig = f.read()
 	fmt = 'hex' if options.message_file else 'bin'
-	received_sig = decode_sig(sig, vks, fmt)
+	received_sig = decode_sig(sig, vks, options.le_sigs,fmt=fmt)
 	e = {}	
 	e0, s = received_sig
 	r0s = ''
@@ -257,7 +271,7 @@ if __name__ == '__main__':
 	    for j in range(len(vks[loop])):
 		#as in signing, r is the EC point corresponding
 		#to the k-value for the last vertex before 0.
-		r,dummy = get_kG(e[i][j],vks[i][j],s=s[i][j], endian=True)
+		r,dummy = get_kG(e[i][j],vks[i][j],s=s[i][j])
 		if j!=len(vks[loop])-1:
 		    e[i][j+1] = borr_hash(M,r,i,j+1)
 		else:
