@@ -1,4 +1,7 @@
 # borring
+
+*Update: algorithm now confirmed to be compatible with that in Elements Alpha*.
+
 Basic implementation of Borromean ring signatures in Python, for learning. I wrote this to aid my own understanding; it may also help you. It is not intended to be functional or fit for any other purpose.
 
 `python borring.py -h` for usage syntax.
