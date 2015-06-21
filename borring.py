@@ -83,11 +83,17 @@ def import_keys(vf, sf=None):
     return (vks, signing_indices, sks)
 
 def get_kG(e, P, s=None):
+    '''Use EC operation: kG = sG +eP.
+    If s (signature) is not provided, it is generated
+    randomly and returned.
+    e - hash value, 32 bytes binary
+    P - verification pubkey
+    s - 32 bytes binary'''
     if not s:
 	s = os.urandom(32)
     sG = btc.fast_multiply(btc.G,btc.decode(s,256))
-    minus_eP = btc.fast_multiply(P,btc.decode(e,256))
-    return (btc.fast_add(sG, minus_eP), s)    
+    eP = btc.fast_multiply(P,btc.decode(e,256))
+    return (btc.fast_add(sG, eP), s)    
 
 def get_sig_message(m, vks):
     '''The full message is a sha256 hash
@@ -224,7 +230,7 @@ if __name__ == '__main__':
 	    kGend, s[i][len(vks[i])-1] = get_kG(e[i][len(vks[i])-1],vks[i][len(vks[i])-1])
 	    to_be_hashed += btc.encode_pubkey(kGend,'bin_compressed')	
 	    
-	#note that e[i][0] == e0 for all i
+	#note that e[i][0] is calculated as a borromean hash of e0, it is not equal to e0
 	to_be_hashed += M
 	e0 = sha256(to_be_hashed).digest()
 	for i in range(len(vks)):
