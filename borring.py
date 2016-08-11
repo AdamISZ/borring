@@ -1,3 +1,4 @@
+#!/usr/bin/python
 import os, binascii
 import bitcoin as btc
 from optparse import OptionParser
