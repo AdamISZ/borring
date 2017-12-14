@@ -1,5 +1,7 @@
 # borring
 
+**UPDATE: Removed bitcoin directory; this serves to prevent misguided usage of this code as anything other than educational/pseudocode! Do NOT attempt to use this in real projects!**
+
 *Update: algorithm now confirmed to be compatible with that in Elements Alpha*.
 
 Basic implementation of Borromean ring signatures in Python, for learning. I wrote this to aid my own understanding; it may also help you. It is not intended to be functional or fit for any other purpose.
@@ -14,7 +16,7 @@ The keys used are Bitcoin (secp256k1 by default) keys. The public keys for verif
 
 The message to be signed must be specified as the single argument to the script, as a single string.
 
-For Bitcoin operations (public/private and ECC operations) a snapshot of [pybitcointools](https://github.com/vbuterin/pybitcointools) is included.
+For Bitcoin operations (public/private and ECC operations) a snapshot of [pybitcointools](https://github.com/vbuterin/pybitcointools) was used; but see first 'update' note above.
 
 
 ## Example (4 OR loops, each with 7 keys)
